@@ -52,11 +52,15 @@ const getLayoutedElements = (nodes, edges, direction = 'LR') => {
 };
 
 const LineageView = () => {
-  const contracts = useEditorStore((state) => state.contracts);
+  const contracts = useEditorStore((state) => state.contracts) || {};
 
   const { initialNodes, initialEdges } = useMemo(() => {
     const nodes = [];
     const edges = [];
+
+    if (!contracts || Object.keys(contracts).length === 0) {
+      return { initialNodes: [], initialEdges: [] };
+    }
 
     Object.entries(contracts).forEach(([path, data]) => {
       try {

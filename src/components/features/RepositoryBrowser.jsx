@@ -43,7 +43,7 @@ const RepositoryBrowser = () => {
                 </button>
             </div>
             <div className="space-y-1">
-                {repoFiles.map(file => (
+                {Array.isArray(repoFiles) && repoFiles.map(file => (
                     <button
                         key={file}
                         onClick={() => openFile(file)}
@@ -54,7 +54,7 @@ const RepositoryBrowser = () => {
                         {file}
                     </button>
                 ))}
-                {repoFiles.length === 0 && (
+                {(!repoFiles || repoFiles.length === 0) && (
                     <p className="px-4 text-[10px] text-gray-400 italic">No files loaded</p>
                 )}
             </div>
