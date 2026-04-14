@@ -7,7 +7,7 @@ import { DEFAULT_AI_CONFIG, DEFAULT_TESTS_CONFIG } from './config/defaults.js';
 import { getStorageConfig } from './utils/persistence.js';
 import { isSafeKey } from './utils/safeProperty.js';
 
-// Storage backend instance - can be set via setFileStorageBackend
+// Storage backend instance
 let fileStorageBackend = new LocalFileStorageBackend();
 
 export const initialYaml = 'apiVersion: "v3.1.0"\nkind: "DataContract"\nid: "example-id"\nversion: "0.0.1"\nstatus: "draft"\nname: "Example Data Contract"\n';
@@ -156,91 +156,85 @@ export function defaultStoreConfig(set, get) {
 				contracts: updatedContracts
 			})
 		},
-		clearSaveInfo: () => set({lastSaveInfo: null}),
 		addNotification: (notification) => {
 			const id = Date.now() + Math.random();
-			const newNotification = {
-				id,
-				type: 'info',
-				duration: 3000,
-				...notification,
-			};
-			set((state) => ({
-				notifications: [...state.notifications, newNotification]
-			}));
-
+			const newNotification = { id, type: 'info', duration: 3000, ...notification };
+			set((state) => ({ notifications: [...state.notifications, newNotification] }));
 			if (newNotification.duration > 0) {
 				setTimeout(() => {
-					set((state) => ({
-						notifications: state.notifications.filter(n => n.id !== id)
-					}));
+					set((state) => ({ notifications: state.notifications.filter(n => n.id !== id) }));
 				}, newNotification.duration);
 			}
-
 			return id;
 		},
-		removeNotification: (id) => set((state) => ({
-			notifications: state.notifications.filter(n => n.id !== id)
-		})),
-		toggleMobileSidebar: () => set((state) => ({
-			isMobileSidebarOpen: !state.isMobileSidebarOpen,
-		})),
+		removeNotification: (id) => set((state) => ({ notifications: state.notifications.filter(n => n.id !== id) })),
+		toggleMobileSidebar: () => set((state) => ({ isMobileSidebarOpen: !state.isMobileSidebarOpen })),
 		closeMobileSidebar: () => set({ isMobileSidebarOpen: false }),
 		setView: (view) => set({currentView: view}),
 		setSelectedDiagramSchemaIndex: (index) => set({selectedDiagramSchemaIndex: index}),
 		setSchemaInfo: (schemaUrl, schemaData) => set({schemaUrl, schemaData}),
 		loadFromFile: async (filename = null) => {
-			try {
-				const yamlContent = await fileStorageBackend.loadYamlFile(filename);
-				const path = filename || 'local-file.yaml';
-				get().loadYaml(yamlContent, path);
-				return yamlContent;
-			} catch (error) {
-				if (error.message !== 'File selection cancelled') {
-					throw error;
-				}
-			}
+			const yamlContent = await fileStorageBackend.loadYamlFile(filename);
+			get().loadYaml(yamlContent, filename || 'local-file.yaml');
+			return yamlContent;
 		},
 		saveToFile: async (suggestedName) => {
-			const {yaml, lastSaveInfo, activePath} = get();
-			const dataContract = Yaml.parse(yaml);
-
-			const dataContractName = (dataContract.name || 'untitled').replace(/[^a-zA-Z0-9_-]/g, '_');
-			const suggestedFilename = suggestedName || activePath || `${dataContractName}.yaml`;
-
-			const result = await fileStorageBackend.saveYamlFile(
-				yaml,
-				suggestedFilename,
-				activePath
-			);
-
-			// Update state for the saved file
+			const {yaml, activePath} = get();
+			const result = await fileStorageBackend.saveYamlFile(yaml, suggestedName || activePath, activePath);
 			const updatedContracts = { ...get().contracts };
 			if (activePath) {
-				updatedContracts[activePath] = {
-					...updatedContracts[activePath],
-					initialYaml: yaml,
-					isDirty: false
-				};
+				updatedContracts[activePath] = { ...updatedContracts[activePath], initialYaml: yaml, isDirty: false };
 			}
-
-			set({
-				baselineYaml: yaml,
-				contracts: updatedContracts,
-				lastSaveInfo: {
-					filename: result?.filename || suggestedFilename,
-					timestamp: new Date().toISOString(),
-					contractName: dataContract.name
-				}
-			});
-
-			get().addNotification({
-				type: 'success',
-				title: 'Saved successfully',
-				message: `${result?.filename || suggestedFilename} has been saved`,
-				duration: 3000
-			});
+			set({ baselineYaml: yaml, contracts: updatedContracts });
+			get().addNotification({ type: 'success', title: 'Saved successfully', duration: 3000 });
 		},
+		setMarkers: (markers) => set({ markers }),
+		togglePreview: () => set((state) => ({ isPreviewVisible: !state.isPreviewVisible, isWarningsVisible: false, isTestResultsVisible: false })),
+		toggleWarnings: () => set((state) => ({ isWarningsVisible: !state.isWarningsVisible, isPreviewVisible: false, isTestResultsVisible: false })),
+		toggleTestResults: () => set((state) => ({ isTestResultsVisible: !state.isTestResultsVisible, isPreviewVisible: false, isWarningsVisible: false })),
+		toggleAiPanel: () => set((state) => ({ isAiPanelOpen: !state.isAiPanelOpen })),
+		openAiPanel: () => set({ isAiPanelOpen: true }),
+		closeAiPanel: () => set({ isAiPanelOpen: false }),
+		resetAiChat: () => set((state) => ({ aiChatResetKey: (state.aiChatResetKey || 0) + 1, aiChatHasMessages: false })),
+		setAiChatHasMessages: (hasMessages) => set({ aiChatHasMessages: hasMessages }),
+		runTest: async (server) => {
+			const {yaml, editorConfig} = get();
+			set({isTestRunning: true});
+			try {
+				const baseUrl = editorConfig?.tests?.dataContractCliApiServerUrl || 'https://api.datacontract.com';
+				const response = await fetch(`${baseUrl}/test${server ? '?server=' + encodeURIComponent(server) : ''}`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'text/plain' },
+					body: yaml
+				});
+				const result = await response.json();
+				const newResult = { timestamp: new Date().toISOString(), success: result.result === 'passed', data: result };
+				set({testResults: [newResult], isTestRunning: false});
+				return newResult;
+			} catch (e) {
+				set({isTestRunning: false});
+				throw e;
+			}
+		},
+		clearTestResults: () => set({testResults: []}),
+		setPendingAiChange: (change) => set({ pendingAiChange: change }),
+		clearPendingAiChange: () => set({ pendingAiChange: null }),
+		applyPendingAiChange: () => {
+			const { pendingAiChange, yaml } = get();
+			if (pendingAiChange?.isValid && pendingAiChange?.updatedYaml) {
+				set({ lastAppliedAiChange: { originalYaml: yaml, summary: pendingAiChange.summary } });
+				actions.setYaml(pendingAiChange.updatedYaml);
+			}
+			set({ pendingAiChange: null });
+		},
+		unapplyAiChange: () => {
+			const { lastAppliedAiChange } = get();
+			if (lastAppliedAiChange?.originalYaml) {
+				actions.setYaml(lastAppliedAiChange.originalYaml);
+				set({ lastAppliedAiChange: null });
+			}
+		},
+		clearLastAppliedAiChange: () => set({ lastAppliedAiChange: null }),
 	};
 
 	return {
@@ -248,17 +242,14 @@ export function defaultStoreConfig(set, get) {
 		yamlParts: Yaml.parse(initialYaml),
 		baselineYaml: initialYaml,
 		activePath: 'default.yaml',
-		contracts: {
-			'default.yaml': {
-				initialYaml: initialYaml,
-				currentYaml: initialYaml,
-				yamlParts: Yaml.parse(initialYaml),
-				isDirty: false
-			}
-		},
-		repoFiles: [], // List of files in the current repository/directory
+		contracts: { 'default.yaml': { initialYaml: initialYaml, currentYaml: initialYaml, yamlParts: Yaml.parse(initialYaml), isDirty: false } },
+		repoFiles: [],
 		isDirty: false,
 		isMobileSidebarOpen: false,
+		isPreviewVisible: true,
+		isWarningsVisible: false,
+		isTestResultsVisible: false,
+		isTestRunning: false,
 		testResults: [],
 		markers: [],
 		yamlParseError: null,
@@ -266,14 +257,14 @@ export function defaultStoreConfig(set, get) {
 		currentView: 'form',
 		schemaUrl: null,
 		schemaData: null,
-		lastSaveInfo: null,
 		notifications: [],
 		selectedDiagramSchemaIndex: null,
-		editorConfig: {
-			mode: 'SERVER',
-			tests: DEFAULT_TESTS_CONFIG,
-			ai: DEFAULT_AI_CONFIG,
-		},
+		isAiPanelOpen: false,
+		aiChatResetKey: 0,
+		aiChatHasMessages: false,
+		pendingAiChange: null,
+		lastAppliedAiChange: null,
+		editorConfig: { mode: 'SERVER', tests: DEFAULT_TESTS_CONFIG, ai: DEFAULT_AI_CONFIG },
 		...actions,
 	};
 }
@@ -287,44 +278,20 @@ const defaultEditorStore = create()(
 		? persist(defaultStoreConfig, {
 			name: 'editor-store',
 			storage: storageConfig,
-			merge: (persistedState, currentState) => {
-				const mergedEditorConfig = {
-					...currentState.editorConfig,
-					...persistedState?.editorConfig,
-				};
-				return {
-					...currentState,
-					...persistedState,
-					editorConfig: mergedEditorConfig,
-				};
-			},
+			merge: (persistedState, currentState) => ({ ...currentState, ...persistedState, editorConfig: { ...currentState.editorConfig, ...persistedState?.editorConfig } }),
 		})
 		: defaultStoreConfig
 	)
 );
 
 export const useEditorStore = (selector) => {
-	const store = overrideStore || defaultEditorStore;
-	return store(selector);
+    const store = overrideStore || defaultEditorStore;
+    return store(selector);
 };
-
-useEditorStore.setState = (state) => {
-	const store = overrideStore || defaultEditorStore;
-	return store.setState(state);
-};
-
-useEditorStore.getState = () => {
-	const store = overrideStore || defaultEditorStore;
-	return store.getState();
-};
+useEditorStore.setState = (state) => (overrideStore || defaultEditorStore).setState(state);
+useEditorStore.getState = () => (overrideStore || defaultEditorStore).getState();
 
 export const setEditorConfig = (config) => {
 	const store = overrideStore || defaultEditorStore;
-	const currentConfig = store.getState().editorConfig;
-	store.setState({
-		editorConfig: {
-			...currentConfig,
-			...config,
-		},
-	});
+	store.setState({ editorConfig: { ...store.getState().editorConfig, ...config } });
 };
