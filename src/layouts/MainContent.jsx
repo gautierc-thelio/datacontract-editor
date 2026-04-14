@@ -2,14 +2,13 @@ import { Routes, Route } from 'react-router-dom';
 import { useRef, useState } from 'react';
 import { YamlEditor, DataContractPreview, TestResultsPanel } from "../components/features/index.js";
 import WarningsPanel from "../components/features/WarningsPanel.jsx";
-import { Overview, TermsOfUse, Schemas, Schema, Diagram, Pricing, Team, Support, Servers, Server, Roles, ServiceLevelAgreement, CustomProperties } from "../routes/index.js";
+import { Overview, TermsOfUse, Schemas, Schema, Diagram, Pricing, Team, Support, Servers, Server, Roles, ServiceLevelAgreement, CustomProperties, Preview, Changes, Lineage } from "../routes/index.js";
 import { useEditorStore } from "../store.js";
 import YamlParseErrorPage from "../components/features/code/YamlParseErrorPage.jsx";
 import { PreviewErrorBoundary, DiagramErrorBoundary, FormPageErrorBoundary, ErrorBoundary } from "../components/error/index.js";
 import ResizeDivider from "../components/ui/ResizeDivider.jsx";
 
 const MainContent = () => {
-  const isPreviewVisible = useEditorStore((state) => state.isPreviewVisible);
   const isWarningsVisible = useEditorStore((state) => state.isWarningsVisible);
   const isTestResultsVisible = useEditorStore((state) => state.isTestResultsVisible);
   const currentView = useEditorStore((state) => state.currentView);
@@ -63,10 +62,10 @@ const MainContent = () => {
   };
 
   // Determine if right pane should be shown
-  const isRightPaneVisible = isPreviewVisible || isWarningsVisible || isTestResultsVisible;
+  const isRightPaneVisible = isWarningsVisible || isTestResultsVisible;
 
   // State for resizable panel width (percentage of left pane relative to left+middle)
-  const [leftPanePercent, setLeftPanePercent] = useState(50);
+  const [leftPanePercent, setLeftPanePercent] = useState(70);
 
   return (
     <div className="flex flex-col w-full h-full min-w-0">
@@ -170,6 +169,21 @@ const MainContent = () => {
                     <CustomProperties />
                   </FormPageErrorBoundary>
                 } />
+                <Route path="/changes" element={
+                  <FormPageErrorBoundary pageName="Changes">
+                    <Changes />
+                  </FormPageErrorBoundary>
+                } />
+                <Route path="/lineage" element={
+                  <FormPageErrorBoundary pageName="Lineage">
+                    <Lineage />
+                  </FormPageErrorBoundary>
+                } />
+                <Route path="/preview" element={
+                  <FormPageErrorBoundary pageName="Preview">
+                    <Preview />
+                  </FormPageErrorBoundary>
+                } />
                 {/* Catch-all route for unmatched paths (e.g., /diagram during view transition) */}
                 <Route path="*" element={
                   <FormPageErrorBoundary pageName="Overview">
@@ -187,16 +201,6 @@ const MainContent = () => {
         )}
 
         {/* Right pane - Preview/Warnings/Tests (mutually exclusive) */}
-        {isPreviewVisible && (
-          <div
-            className="hidden md:block h-full p-4 overflow-y-auto overflow-x-hidden bg-gray-50"
-            style={{ width: `${100 - leftPanePercent}%` }}
-          >
-            <PreviewErrorBoundary>
-              <DataContractPreview />
-            </PreviewErrorBoundary>
-          </div>
-        )}
         {isWarningsVisible && (
           <div
             className="hidden md:block h-full"

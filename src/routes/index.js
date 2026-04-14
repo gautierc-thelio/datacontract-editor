@@ -11,3 +11,6 @@ export { default as Server } from './Server.jsx';
 export { default as Roles } from './Roles.jsx';
 export { default as ServiceLevelAgreement } from './ServiceLevelAgreement.jsx';
 export { default as CustomProperties } from './CustomProperties.jsx';
+export { default as Preview } from './Preview.jsx';
+export { default as Changes } from './Changes.jsx';
+export { default as Lineage } from './Lineage.jsx';
