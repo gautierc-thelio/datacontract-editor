@@ -8,17 +8,52 @@ export class LocalFileStorageBackend extends FileStorageBackend {
   constructor() {
     super();
     this.supportsFileSystemAccess = 'showOpenFilePicker' in window && 'showSaveFilePicker' in window;
+    this.directoryHandle = null;
   }
 
   /**
    * Load a YAML file using browser file picker
    * @returns {Promise<string>} The YAML content as a string
    */
-  async loadYamlFile() {
+  async loadYamlFile(filename = null) {
+    if (this.directoryHandle && filename) {
+        try {
+            const fileHandle = await this.directoryHandle.getFileHandle(filename);
+            const file = await fileHandle.getFile();
+            return await file.text();
+        } catch (e) {
+            console.error('Failed to load from directory handle:', e);
+        }
+    }
+
     if (this.supportsFileSystemAccess) {
       return this._loadWithFileSystemAccess();
     } else {
       return this._loadWithFileInput();
+    }
+  }
+
+  /**
+   * Scan directory for YAML files
+   * @returns {Promise<string[]>} List of filenames
+   */
+  async scanDirectory() {
+    if (!('showDirectoryPicker' in window)) {
+        throw new Error('Directory access not supported in this browser');
+    }
+
+    try {
+        this.directoryHandle = await window.showDirectoryPicker();
+        const files = [];
+        for await (const entry of this.directoryHandle.values()) {
+            if (entry.kind === 'file' && (entry.name.endsWith('.yaml') || entry.name.endsWith('.yml'))) {
+                files.push(entry.name);
+            }
+        }
+        return files;
+    } catch (e) {
+        console.error('Failed to scan directory:', e);
+        return [];
     }
   }
 
@@ -32,6 +67,18 @@ export class LocalFileStorageBackend extends FileStorageBackend {
   async saveYamlFile(yamlContent, suggestedName = 'datacontract.yaml', existingFilename = null) {
     if (!yamlContent.trim()) {
       throw new Error('No content to save');
+    }
+
+    if (this.directoryHandle && existingFilename) {
+        try {
+            const fileHandle = await this.directoryHandle.getFileHandle(existingFilename, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(yamlContent);
+            await writable.close();
+            return { filename: existingFilename };
+        } catch (e) {
+            console.error('Failed to save to directory handle:', e);
+        }
     }
 
     if (this.supportsFileSystemAccess) {

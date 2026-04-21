@@ -2,47 +2,30 @@ import {create} from 'zustand'
 import {devtools, persist} from 'zustand/middleware'
 import {LocalFileStorageBackend} from './services/LocalFileStorageBackend.js'
 import * as Yaml from "yaml";
-import { stringifyYaml, setYamlFormatConfig } from './utils/yaml.js';
+import { stringifyYaml, setYamlFormatConfig, parseYaml } from './utils/yaml.js';
 import { DEFAULT_AI_CONFIG, DEFAULT_TESTS_CONFIG } from './config/defaults.js';
 import { getStorageConfig } from './utils/persistence.js';
 import { isSafeKey } from './utils/safeProperty.js';
 
-// Storage backend instance - can be set via setFileStorageBackend
+// Storage backend instance
 let fileStorageBackend = new LocalFileStorageBackend();
 
 export const initialYaml = 'apiVersion: "v3.1.0"\nkind: "DataContract"\nid: "example-id"\nversion: "0.0.1"\nstatus: "draft"\nname: "Example Data Contract"\n';
 
-/**
- * Set the file storage backend to use for the editor
- * @param {FileStorageBackend} backend - The storage backend instance
- */
 export const setFileStorageBackend = (backend) => {
 	fileStorageBackend = backend;
 };
 
-/**
- * Get the current file storage backend
- * @returns {FileStorageBackend}
- */
 export const getFileStorageBackend = () => {
 	return fileStorageBackend;
 };
 
-// Override store - when set, useEditorStore will use this instead of the default store
 let overrideStore = null;
 
-/**
- * Set the override store for embedded mode
- * @param {Object} store - The zustand store instance to use
- */
 export const setOverrideStore = (store) => {
 	overrideStore = store;
 };
 
-/**
- * Get the override store
- * @returns {Object|null}
- */
 export const getOverrideStore = () => {
 	return overrideStore;
 };
@@ -55,7 +38,6 @@ export function getValueWithPath(obj, path, defaultValue) {
 }
 
 export function setValueWithPath(obj, path, value) {
-	// Deep clone the object to avoid mutations
 	const newObj = JSON.parse(JSON.stringify(obj || {}));
 	const keys = path.match(/[^.[\]]+/g);
 	if (keys?.some((k) => !isSafeKey(k))) return newObj;
@@ -87,78 +69,130 @@ export function extractParseErrorPos(e) {
 }
 
 export function defaultStoreConfig(set, get) {
-	// Define action functions to ensure stable references
 	const actions = {
 		setYaml: (newYaml) => {
+			const { activePath, contracts } = get();
 			try {
 				const yamlParts = Yaml.parse(newYaml);
-				set({yaml: newYaml, isDirty: true, yamlParts, yamlParseError: null, yamlParseErrorPos: null});
+				const updatedContracts = { ...contracts };
+				if (activePath) {
+					updatedContracts[activePath] = {
+						...updatedContracts[activePath],
+						currentYaml: newYaml,
+						yamlParts,
+						isDirty: newYaml !== updatedContracts[activePath]?.initialYaml
+					};
+				}
+				set({
+					yaml: newYaml,
+					yamlParts,
+					yamlParseError: null,
+					yamlParseErrorPos: null,
+					contracts: updatedContracts
+				});
 			} catch(e) {
-				set({yaml: newYaml, isDirty: true, yamlParseError: extractParseErrorMessage(e), yamlParseErrorPos: extractParseErrorPos(e)});
+				set({
+					yaml: newYaml,
+					yamlParseError: extractParseErrorMessage(e),
+					yamlParseErrorPos: extractParseErrorPos(e)
+				});
 			}
 		},
-		loadYaml: (newYaml) => {
+		loadYaml: (newYaml, path = 'default.yaml') => {
 			try {
 				const yamlParts = Yaml.parse(newYaml);
-				set({yaml: newYaml, baselineYaml: newYaml, isDirty: false, yamlParts, yamlParseError: null, yamlParseErrorPos: null});
+				const updatedContracts = { ...get().contracts };
+				updatedContracts[path] = {
+					initialYaml: newYaml,
+					currentYaml: newYaml,
+					yamlParts,
+					isDirty: false
+				};
+				set({
+					yaml: newYaml,
+					baselineYaml: newYaml,
+					yamlParts,
+					yamlParseError: null,
+					yamlParseErrorPos: null,
+					activePath: path,
+					contracts: updatedContracts
+				});
 			} catch(e) {
-				// NOOP
+				// ignore
 			}
 		},
+		setActivePath: (path) => {
+			const { contracts } = get();
+			const contract = contracts[path];
+			if (contract) {
+				set({
+					activePath: path,
+					yaml: contract.currentYaml,
+					yamlParts: contract.yamlParts,
+					baselineYaml: contract.initialYaml
+				});
+			}
+		},
+		setRepoFiles: (files) => set({ repoFiles: files }),
 		getValue: (path) => getValueWithPath(get().yamlParts, path),
 		setValue: (path, value) => {
-			const newYamlParts = setValueWithPath(get().yamlParts, path, value);
-			set({yamlParts: newYamlParts, yaml: stringifyYaml(newYamlParts), isDirty: true})
-		},
-		clearSaveInfo: () => set({lastSaveInfo: null}),
-		addNotification: (notification) => {
-			const id = Date.now() + Math.random();
-			const newNotification = {
-				id,
-				type: 'info',
-				duration: 3000,
-				...notification,
-			};
-			set((state) => ({
-				notifications: [...state.notifications, newNotification]
-			}));
+			const { yamlParts, activePath, contracts } = get();
+			const newYamlParts = setValueWithPath(yamlParts, path, value);
+			const newYaml = stringifyYaml(newYamlParts);
 
-			// Auto-remove notification after duration
-			if (newNotification.duration > 0) {
-				setTimeout(() => {
-					set((state) => ({
-						notifications: state.notifications.filter(n => n.id !== id)
-					}));
-				}, newNotification.duration);
+			const updatedContracts = { ...contracts };
+			if (activePath) {
+				updatedContracts[activePath] = {
+					...updatedContracts[activePath],
+					currentYaml: newYaml,
+					yamlParts: newYamlParts,
+					isDirty: newYaml !== updatedContracts[activePath]?.initialYaml
+				};
 			}
 
+			set({
+				yamlParts: newYamlParts,
+				yaml: newYaml,
+				contracts: updatedContracts
+			})
+		},
+		addNotification: (notification) => {
+			const id = Date.now() + Math.random();
+			const newNotification = { id, type: 'info', duration: 3000, ...notification };
+			set((state) => ({ notifications: [...state.notifications, newNotification] }));
+			if (newNotification.duration > 0) {
+				setTimeout(() => {
+					set((state) => ({ notifications: state.notifications.filter(n => n.id !== id) }));
+				}, newNotification.duration);
+			}
 			return id;
 		},
-		removeNotification: (id) => set((state) => ({
-			notifications: state.notifications.filter(n => n.id !== id)
-		})),
-		toggleMobileSidebar: () => set((state) => ({
-			isMobileSidebarOpen: !state.isMobileSidebarOpen,
-		})),
+		removeNotification: (id) => set((state) => ({ notifications: state.notifications.filter(n => n.id !== id) })),
+		toggleMobileSidebar: () => set((state) => ({ isMobileSidebarOpen: !state.isMobileSidebarOpen })),
 		closeMobileSidebar: () => set({ isMobileSidebarOpen: false }),
-		togglePreview: () => set((state) => ({
-			isPreviewVisible: !state.isPreviewVisible,
-			isWarningsVisible: false,
-			isTestResultsVisible: false,
-		})),
-		toggleWarnings: () => set((state) => ({
-			isWarningsVisible: !state.isWarningsVisible,
-			isPreviewVisible: false,
-			isTestResultsVisible: false,
-		})),
-		toggleTestResults: () => set((state) => ({
-			isTestResultsVisible: !state.isTestResultsVisible,
-			isPreviewVisible: false,
-			isWarningsVisible: false,
-		})),
-		toggleAiPanel: () => set((state) => ({
-			isAiPanelOpen: !state.isAiPanelOpen,
-		})),
+		setView: (view) => set({currentView: view}),
+		setSelectedDiagramSchemaIndex: (index) => set({selectedDiagramSchemaIndex: index}),
+		setSchemaInfo: (schemaUrl, schemaData) => set({schemaUrl, schemaData}),
+		loadFromFile: async (filename = null) => {
+			const yamlContent = await fileStorageBackend.loadYamlFile(filename);
+			get().loadYaml(yamlContent, filename || 'local-file.yaml');
+			return yamlContent;
+		},
+		saveToFile: async (suggestedName) => {
+			const {yaml, activePath} = get();
+			const result = await fileStorageBackend.saveYamlFile(yaml, suggestedName || activePath, activePath);
+			const updatedContracts = { ...get().contracts };
+			if (activePath) {
+				updatedContracts[activePath] = { ...updatedContracts[activePath], initialYaml: yaml, isDirty: false };
+			}
+			set({ baselineYaml: yaml, contracts: updatedContracts });
+			get().addNotification({ type: 'success', title: 'Saved successfully', duration: 3000 });
+		},
+		setMarkers: (markers) => set({ markers }),
+		togglePreview: () => set((state) => ({ isPreviewVisible: !state.isPreviewVisible, isWarningsVisible: false, isTestResultsVisible: false })),
+		toggleWarnings: () => set((state) => ({ isWarningsVisible: !state.isWarningsVisible, isPreviewVisible: false, isTestResultsVisible: false })),
+		toggleTestResults: () => set((state) => ({ isTestResultsVisible: !state.isTestResultsVisible, isPreviewVisible: false, isWarningsVisible: false })),
+		toggleAiPanel: () => set((state) => ({ isAiPanelOpen: !state.isAiPanelOpen })),
 		openAiPanel: () => set({ isAiPanelOpen: true }),
 		closeAiPanel: () => set({ isAiPanelOpen: false }),
 		resetAiChat: () => set((state) => ({ aiChatResetKey: (state.aiChatResetKey || 0) + 1, aiChatHasMessages: false })),
@@ -167,113 +201,27 @@ export function defaultStoreConfig(set, get) {
 			const {yaml, editorConfig} = get();
 			set({isTestRunning: true});
 			try {
-				// Build the test endpoint URL
 				const baseUrl = editorConfig?.tests?.dataContractCliApiServerUrl || 'https://api.datacontract.com';
-				const testEndpoint = `${baseUrl}/test`;
-				const url = server ? `${testEndpoint}?server=${encodeURIComponent(server)}` : testEndpoint;
-
-				// Build headers with optional API key
-				const headers = {
-					'Content-Type': 'text/plain',
-				};
-				if (editorConfig?.tests?.apiKey) {
-					headers['X-API-KEY'] = editorConfig.tests.apiKey;
-				}
-
-				const response = await fetch(url, {
+				const response = await fetch(`${baseUrl}/test${server ? '?server=' + encodeURIComponent(server) : ''}`, {
 					method: 'POST',
-					headers,
-					body: yaml,
+					headers: { 'Content-Type': 'text/plain' },
+					body: yaml
 				});
-
-				// Check if response status is OK
-				if (!response.ok) {
-					let errorMessage = `Server returned error: ${response.status} ${response.statusText}`;
-
-					// Try to parse error response as JSON
-					try {
-						const errorData = await response.json();
-						if (errorData.message) {
-							errorMessage = errorData.message;
-						} else if (errorData.error) {
-							errorMessage = errorData.error;
-						}
-					} catch {
-						// If JSON parsing fails, try to get text
-						try {
-							const errorText = await response.text();
-							if (errorText) {
-								errorMessage = errorText;
-							}
-						} catch {
-							// Keep the default error message
-						}
-					}
-
-					throw new Error(errorMessage);
-				}
-
-				// Parse successful response
 				const result = await response.json();
-
-				// Determine success from response data's result field
-				let success = false;
-				if (result.result) {
-					// Use the result field from the response
-					success = result.result === 'passed' || result.result === 'pass';
-				} else if (Array.isArray(result.checks)) {
-					// Fallback: check if any checks failed
-					const hasFailures = result.checks.some(check =>
-						check.result === 'failed' || check.result === 'fail' || check.result === false
-					);
-					success = !hasFailures;
-				}
-
-				const newResult = {
-					timestamp: new Date().toISOString(),
-					success: success,
-					data: result,
-				};
-
-				// Keep only the current result (no history)
+				const newResult = { timestamp: new Date().toISOString(), success: result.result === 'passed', data: result };
 				set({testResults: [newResult], isTestRunning: false});
-
 				return newResult;
-			} catch (error) {
-				// Provide better error messages for common issues
-				let errorMessage = error.message;
-				let isConnectionError = false;
-
-				if (error.name === 'TypeError' && error.message.includes('fetch')) {
-					const displayUrl = editorConfig?.tests?.dataContractCliApiServerUrl || 'https://api.datacontract.com';
-					errorMessage = `Cannot connect to Data Contract CLI at ${displayUrl}.`;
-					isConnectionError = true;
-				} else if (error.message === 'Unexpected end of JSON input' || error.message.includes('JSON')) {
-					errorMessage = 'Test server returned an invalid response. The server may be misconfigured or not responding correctly.';
-				}
-
-				const errorResult = {
-					timestamp: new Date().toISOString(),
-					success: false,
-					error: errorMessage,
-					isConnectionError: isConnectionError,
-				};
-
-				// Keep only the current result (no history)
-				set({testResults: [errorResult], isTestRunning: false});
-
-				throw error;
+			} catch (e) {
+				set({isTestRunning: false});
+				throw e;
 			}
 		},
 		clearTestResults: () => set({testResults: []}),
-		setMarkers: (markers) => set({markers}),
-		// AI pending change actions
 		setPendingAiChange: (change) => set({ pendingAiChange: change }),
 		clearPendingAiChange: () => set({ pendingAiChange: null }),
 		applyPendingAiChange: () => {
 			const { pendingAiChange, yaml } = get();
 			if (pendingAiChange?.isValid && pendingAiChange?.updatedYaml) {
-				// Store original YAML for unapply
 				set({ lastAppliedAiChange: { originalYaml: yaml, summary: pendingAiChange.summary } });
 				actions.setYaml(pendingAiChange.updatedYaml);
 			}
@@ -287,81 +235,15 @@ export function defaultStoreConfig(set, get) {
 			}
 		},
 		clearLastAppliedAiChange: () => set({ lastAppliedAiChange: null }),
-		setView: (view) => set({currentView: view}),
-		setSelectedDiagramSchemaIndex: (index) => set({selectedDiagramSchemaIndex: index}),
-		setSchemaInfo: (schemaUrl, schemaData) => set({schemaUrl, schemaData}),
-		loadFromFile: async (filename = null) => {
-			try {
-				const yamlContent = await fileStorageBackend.loadYamlFile(filename);
-
-				// Try to parse the YAML to get the contract name
-				let contractName = 'untitled';
-				try {
-					const parsed = Yaml.parse(yamlContent);
-					contractName = parsed.name || 'untitled';
-				} catch {
-					// If parsing fails, use default
-				}
-
-				// Set the loaded file info so subsequent saves update the same file
-				get().setYaml(yamlContent);
-				set({
-					baselineYaml: yamlContent,
-					lastSaveInfo: filename ? {
-						filename: filename,
-						timestamp: new Date().toISOString(),
-						contractName: contractName
-					} : null
-				});
-				return yamlContent;
-			} catch (error) {
-				if (error.message !== 'File selection cancelled') {
-					throw error;
-				}
-			}
-		},
-		saveToFile: async (suggestedName) => {
-			const {yaml, lastSaveInfo} = get();
-			const dataContract = Yaml.parse(yaml);
-
-			const dataContractName = (dataContract.name || 'untitled').replace(/[^a-zA-Z0-9_-]/g, '_');
-			const suggestedFilename = `${suggestedName || dataContractName}.yaml`;
-
-			// If we have a previous save, pass the filename to update the existing file
-			const existingFilename = lastSaveInfo?.filename;
-			const result = await fileStorageBackend.saveYamlFile(
-				yaml,
-				suggestedFilename,
-				existingFilename
-			);
-
-			// Update save status and baseline
-			set({
-				isDirty: false,
-				baselineYaml: yaml,
-				lastSaveInfo: {
-					filename: result?.filename || suggestedFilename,
-					timestamp: new Date().toISOString(),
-					contractName: dataContract.name
-				}
-			});
-
-			// Show success notification
-			const {addNotification} = get();
-			addNotification({
-				type: 'success',
-				title: 'Saved successfully',
-				message: `${result?.filename || suggestedFilename} has been saved`,
-				duration: 3000
-			});
-		},
 	};
-
 
 	return {
 		yaml: initialYaml,
 		yamlParts: Yaml.parse(initialYaml),
-		baselineYaml: initialYaml, // YAML at last save/load for diff comparison
+		baselineYaml: initialYaml,
+		activePath: 'default.yaml',
+		contracts: { 'default.yaml': { initialYaml: initialYaml, currentYaml: initialYaml, yamlParts: Yaml.parse(initialYaml), isDirty: false } },
+		repoFiles: [],
 		isDirty: false,
 		isMobileSidebarOpen: false,
 		isPreviewVisible: true,
@@ -372,41 +254,21 @@ export function defaultStoreConfig(set, get) {
 		markers: [],
 		yamlParseError: null,
 		yamlParseErrorPos: null,
-		pendingScrollToPos: null,
-		currentView: 'form', // 'yaml' or 'form'
+		currentView: 'form',
 		schemaUrl: null,
 		schemaData: null,
-		yamlCursorLine: 1,
-		lastSaveInfo: null, // { filename, timestamp, contractName }
-		notifications: [], // { id, type, message, duration }
-		selectedDiagramSchemaIndex: null, // Currently selected schema in diagram view
-		selectedProperty: null, // { schemaIndex, propPath, property, onUpdate, onDelete } for property details drawer
-		editorConfig: {
-			mode: 'SERVER', // SERVER, DESKTOP, or EMBEDDED
-			onCancel: null,
-			onDelete: null,
-			showDelete: true, // Show Delete button in EMBEDDED mode
-			teams: null,
-			domains: null,
-			tests: DEFAULT_TESTS_CONFIG,
-			ai: DEFAULT_AI_CONFIG,
-			semantics: null, // { baseUrl, pageParam, queryParam } for semantic ontology tree API
-			definitions: null, // { baseUrl, pageParam, queryParam } for business definitions search API
-      managedTags: [], // [{tag: 'tag1', href: 'https://...'}, ...]
-      allowUnmanagedTags: true,
-			customizations: null, // See CUSTOMIZATION.md for documentation
-		},
+		notifications: [],
+		selectedDiagramSchemaIndex: null,
 		isAiPanelOpen: false,
 		aiChatResetKey: 0,
 		aiChatHasMessages: false,
-		pendingAiChange: null, // { updatedYaml, summary, validationErrors, isValid }
-		lastAppliedAiChange: null, // { originalYaml, summary } - for unapply
+		pendingAiChange: null,
+		lastAppliedAiChange: null,
+		editorConfig: { mode: 'SERVER', tests: DEFAULT_TESTS_CONFIG, ai: DEFAULT_AI_CONFIG },
 		...actions,
 	};
 }
 
-
-// Create central zustand store for app state
 const persistence = import.meta.env.VITE_PERSISTENCE || 'sessionStorage';
 const storageConfig = getStorageConfig(persistence);
 
@@ -416,99 +278,20 @@ const defaultEditorStore = create()(
 		? persist(defaultStoreConfig, {
 			name: 'editor-store',
 			storage: storageConfig,
-			merge: (persistedState, currentState) => {
-				// Deep merge editorConfig, ensuring empty strings don't override build-time defaults
-				const persistedAi = persistedState?.editorConfig?.ai || {};
-				const defaultAi = currentState.editorConfig?.ai || {};
-
-				const mergedEditorConfig = {
-					...currentState.editorConfig,
-					...persistedState?.editorConfig,
-					tests: {
-						...currentState.editorConfig?.tests,
-						...persistedState?.editorConfig?.tests,
-					},
-					ai: {
-						...defaultAi,
-						...persistedAi,
-						// Prefer build-time defaults over empty persisted values
-						endpoint: persistedAi.endpoint || defaultAi.endpoint,
-						apiKey: persistedAi.apiKey || defaultAi.apiKey,
-					},
-				};
-				return {
-					...currentState,
-					...persistedState,
-					editorConfig: mergedEditorConfig,
-				};
-			},
-			onRehydrateStorage: () => (state) => {
-				// Clean up orphaned localStorage data from pre-sessionStorage versions
-				if (persistence !== 'localStorage') {
-					try { localStorage.removeItem('editor-store'); } catch { /* ignore */ }
-				}
-				// Sync yamlParts from yaml when rehydrating from persisted storage
-				// setTimeout needed because defaultEditorStore isn't fully initialized yet
-				if (state?.yaml) {
-					setTimeout(() => {
-						try {
-							const yamlParts = Yaml.parse(state.yaml);
-							defaultEditorStore.setState({ yamlParts });
-						} catch (e) {
-							console.warn('Failed to parse yaml during rehydration:', e);
-						}
-					}, 0);
-				}
-			},
+			merge: (persistedState, currentState) => ({ ...currentState, ...persistedState, editorConfig: { ...currentState.editorConfig, ...persistedState?.editorConfig } }),
 		})
 		: defaultStoreConfig
 	)
 );
 
-/**
- * Hook that returns either the override store (when embedded) or the default store
- * This allows embedded mode to inject a configured store while maintaining backward compatibility
- */
 export const useEditorStore = (selector) => {
-	const store = overrideStore || defaultEditorStore;
-	return store(selector);
+    const store = overrideStore || defaultEditorStore;
+    return store(selector);
 };
+useEditorStore.setState = (state) => (overrideStore || defaultEditorStore).setState(state);
+useEditorStore.getState = () => (overrideStore || defaultEditorStore).getState();
 
-// Expose setState for direct state updates (needed for event handlers)
-useEditorStore.setState = (state) => {
-	const store = overrideStore || defaultEditorStore;
-	return store.setState(state);
-};
-
-useEditorStore.getState = () => {
-	const store = overrideStore || defaultEditorStore;
-	return store.getState();
-};
-
-/**
- * Update the editor configuration
- * @param {Object} config - Configuration object to merge with existing config
- */
 export const setEditorConfig = (config) => {
 	const store = overrideStore || defaultEditorStore;
-	const currentConfig = store.getState().editorConfig;
-	store.setState({
-		editorConfig: {
-			...currentConfig,
-			...config,
-			// Deep merge the tests object if provided
-			tests: config.tests ? {
-				...currentConfig.tests,
-				...config.tests,
-			} : currentConfig.tests,
-			// Deep merge the ai object if provided
-			ai: config.ai ? {
-				...currentConfig.ai,
-				...config.ai,
-			} : currentConfig.ai,
-		},
-	});
-	if (config.customizations?.yamlFormat) {
-		setYamlFormatConfig(config.customizations.yamlFormat);
-	}
+	store.setState({ editorConfig: { ...store.getState().editorConfig, ...config } });
 };
